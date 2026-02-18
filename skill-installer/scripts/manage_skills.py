@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Manage skill installation for Claude Code projects via symlinks.
+"""Manage skill installation for projects via symlinks.
 
 Skills are sourced from a local skills directory organized by provider.
-Installation creates symlinks in the project's .claude/skills/ directory,
-so updates to skills propagate automatically.
+Installation creates symlinks in the project's .claude/skills/,
+.copilot/skills/, and .agents/skills/ directories so updates to skills
+propagate automatically.
 
 Usage:
     manage_skills.py list [--skills-root PATH]
@@ -24,6 +25,13 @@ DEFAULT_SKILLS_ROOT = os.path.expanduser(
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "template", "spec", ".claude-plugin"}
 SKIP_SKILL_NAMES = {"template"}
+
+# All target directories where skill symlinks are installed
+SKILL_TARGET_DIRS = [
+    os.path.join(".claude", "skills"),
+    os.path.join(".copilot", "skills"),
+    os.path.join(".agents", "skills"),
+]
 
 
 def parse_frontmatter(skill_md_path):
@@ -109,27 +117,30 @@ def discover_skills(skills_root):
     return skills
 
 
-def get_project_skills_dir(project_path):
-    """Return the .claude/skills directory for a project."""
-    return os.path.join(project_path, ".claude", "skills")
+def get_project_skills_dirs(project_path):
+    """Return the list of skills directories for a project."""
+    return [os.path.join(project_path, d) for d in SKILL_TARGET_DIRS]
 
 
 def get_installed_skills(project_path):
-    """Return dict of installed skill names -> symlink targets (or None if not a symlink)."""
-    skills_dir = get_project_skills_dir(project_path)
-    installed = {}
-    if not os.path.isdir(skills_dir):
-        return installed
+    """Return dict of installed skill names -> symlink targets (or None if not a symlink).
 
-    for entry in sorted(os.listdir(skills_dir)):
-        entry_path = os.path.join(skills_dir, entry)
-        if entry.startswith("."):
+    Checks all target directories and reports a skill as installed if it exists
+    in any of them.
+    """
+    installed = {}
+    for skills_dir in get_project_skills_dirs(project_path):
+        if not os.path.isdir(skills_dir):
             continue
-        if os.path.isdir(entry_path):
-            if os.path.islink(entry_path):
-                installed[entry] = os.readlink(entry_path)
-            else:
-                installed[entry] = None  # Regular directory, not a symlink
+        for entry in sorted(os.listdir(skills_dir)):
+            entry_path = os.path.join(skills_dir, entry)
+            if entry.startswith("."):
+                continue
+            if os.path.isdir(entry_path) and entry not in installed:
+                if os.path.islink(entry_path):
+                    installed[entry] = os.readlink(entry_path)
+                else:
+                    installed[entry] = None
     return installed
 
 
@@ -211,53 +222,70 @@ def cmd_install(args):
             sys.exit(1)
 
     skill = matches[0]
-    skills_dir = get_project_skills_dir(args.project)
-    link_path = os.path.join(skills_dir, skill["dir_name"])
+    skills_dirs = get_project_skills_dirs(args.project)
 
-    # Check if already installed
-    if os.path.exists(link_path):
-        if os.path.islink(link_path):
-            current_target = os.readlink(link_path)
-            if current_target == skill["path"]:
-                print(f"Skill '{skill['name']}' is already installed (symlinked to {skill['path']}).")
-                return
+    # Check if already installed in any target directory
+    for skills_dir in skills_dirs:
+        link_path = os.path.join(skills_dir, skill["dir_name"])
+        if os.path.exists(link_path):
+            if os.path.islink(link_path):
+                current_target = os.readlink(link_path)
+                if current_target == skill["path"]:
+                    continue  # Already correct in this dir
+                else:
+                    print(f"Skill '{skill['name']}' is already installed in {skills_dir} but points to a different location:")
+                    print(f"  Current: {current_target}")
+                    print(f"  New:     {skill['path']}")
+                    print("Remove the existing link first with 'uninstall'.")
+                    sys.exit(1)
             else:
-                print(f"Skill '{skill['name']}' is already installed but points to a different location:")
-                print(f"  Current: {current_target}")
-                print(f"  New:     {skill['path']}")
-                print("Remove the existing link first with 'uninstall'.")
+                print(f"Error: '{link_path}' exists and is not a symlink. Remove it manually if you want to replace it.")
                 sys.exit(1)
-        else:
-            print(f"Error: '{link_path}' exists and is not a symlink. Remove it manually if you want to replace it.")
-            sys.exit(1)
 
-    # Create .claude/skills/ directory if needed
-    os.makedirs(skills_dir, exist_ok=True)
+    # Create symlinks in all target directories
+    created = []
+    for skills_dir in skills_dirs:
+        link_path = os.path.join(skills_dir, skill["dir_name"])
+        if os.path.islink(link_path) and os.readlink(link_path) == skill["path"]:
+            continue  # Already correct
+        os.makedirs(skills_dir, exist_ok=True)
+        os.symlink(skill["path"], link_path)
+        created.append(link_path)
 
-    # Create symlink
-    os.symlink(skill["path"], link_path)
     print(f"Installed '{skill['name']}' from {skill['provider']}")
-    print(f"  {link_path} -> {skill['path']}")
+    for link_path in created:
+        print(f"  {link_path} -> {skill['path']}")
 
 
 def cmd_uninstall(args):
-    """Uninstall a skill by removing its symlink."""
-    skills_dir = get_project_skills_dir(args.project)
-    link_path = os.path.join(skills_dir, args.skill_name)
+    """Uninstall a skill by removing its symlinks from all target directories."""
+    skills_dirs = get_project_skills_dirs(args.project)
+    removed = []
+    errors = []
 
-    if not os.path.exists(link_path) and not os.path.islink(link_path):
+    for skills_dir in skills_dirs:
+        link_path = os.path.join(skills_dir, args.skill_name)
+        if not os.path.exists(link_path) and not os.path.islink(link_path):
+            continue
+        if not os.path.islink(link_path):
+            errors.append(f"  '{link_path}' is not a symlink (local copy). Remove manually: rm -rf {link_path}")
+            continue
+        target = os.readlink(link_path)
+        os.unlink(link_path)
+        removed.append(f"  {link_path} -> {target}")
+
+    if not removed and not errors:
         print(f"Error: Skill '{args.skill_name}' is not installed for this project.")
         sys.exit(1)
 
-    if not os.path.islink(link_path):
-        print(f"Error: '{link_path}' is not a symlink. It appears to be a local copy.")
-        print("Remove it manually if you're sure: rm -rf", link_path)
-        sys.exit(1)
-
-    target = os.readlink(link_path)
-    os.unlink(link_path)
-    print(f"Uninstalled '{args.skill_name}'")
-    print(f"  Removed symlink: {link_path} -> {target}")
+    if removed:
+        print(f"Uninstalled '{args.skill_name}'")
+        for r in removed:
+            print(r)
+    if errors:
+        print("Warnings:")
+        for e in errors:
+            print(e)
 
 
 def main():
