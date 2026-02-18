@@ -1,11 +1,11 @@
 ---
 name: skill-installer
-description: Install and manage Claude Code skills for the current project from a local skills directory. Use when a user asks to list available skills, install skills, uninstall skills, or check which skills are installed for their project. Skills are installed as symlinks so updates to source skills propagate automatically.
+description: Install and manage skills for the current project from a local skills directory. Use when a user asks to list available skills, install skills, uninstall skills, or check which skills are installed for their project. Skills are installed as symlinks into .claude/skills/, .copilot/skills/, and .agents/skills/ so updates to source skills propagate automatically.
 ---
 
 # Skill Installer
 
-Manage project-level skill installation from a local skills directory at `~/Documents/workspaces/skills/`. Each subdirectory is a provider (e.g., `anthropics`, `openai`, `gordolabs`). Installation creates symlinks in the project's `.claude/skills/` directory.
+Manage project-level skill installation from a local skills directory at `~/Documents/workspaces/skills/`. Each subdirectory is a provider (e.g., `anthropics`, `openai`, `gordolabs`). Installation creates symlinks in the project's `.claude/skills/`, `.copilot/skills/`, and `.agents/skills/` directories.
 
 ## Script
 
@@ -45,13 +45,14 @@ scripts/manage_skills.py uninstall <SKILL_NAME> --project <PROJECT_PATH>
 
 ## Workflow
 
-When the user asks to install skills:
+When the user asks to list or install skills:
 
 1. Run `list --project <path>` to show available skills with install status
-2. Present the list to the user and ask which skills they want
-3. Run `install` for each selected skill
-4. If a skill name is ambiguous (exists in multiple providers), ask the user which provider they want
-5. After installation, tell the user to restart Claude Code to pick up new skills
+2. **Always present the complete, unabridged list** to the user — never summarize, truncate, or omit skills
+3. Ask which skills they want to install
+4. Run `install` for each selected skill
+5. If a skill name is ambiguous (exists in multiple providers), ask the user which provider they want
+6. After installation, tell the user to restart Claude Code to pick up new skills
 
 When the user asks to uninstall:
 
